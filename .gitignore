@@ -1,0 +1,14 @@
+.vscode/
+.Rprofile
+
+renv/
+notes.txt
+output/
+input/
+RNADE.RData
+libs.r
+
+environment_MINIMAL.yaml
+environment2.yaml
+
+example

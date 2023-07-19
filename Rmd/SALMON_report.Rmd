@@ -1,0 +1,1041 @@
+---
+title: SALMON Bulk RNA Differential expresion analysis with DESeq2 & edgeR
+date: "Last Updated: `r format(Sys.time(), '%d, %B, %Y at %H:%M')`"
+output:
+    html_document:
+        toc: true
+        toc_float: true
+        code_folding: hide
+        theme: cerulean
+params:
+    countFilePath_SALMON: "countFilePath_SALMON"
+    output: "output"
+    coldata: "coldata"
+    annotated: "annotated"
+    formula: "formula"
+    min_count: 10
+    fdr: 0.05
+    conditionN: 2
+    log2FCT: 2
+    topNGenes: 20
+    t2gPath: "t2gPath"
+---
+
+# Setup
+
+## Intruduction
+
+This report is designed to be used with the SALMON pipeline.
+It will take the output of the SALMON pipeline and perform differential gene expression analysis using DESeq2 and edgeR.
+The report will also generate a number of plots to help visualise the data.
+
+## Samplesheet and count data content
+
+Check for samplesheet and count data content.
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(
+  root.dir = "../"
+  )
+knitr::opts_chunk$set(
+  warning = FALSE,
+  message = FALSE
+  )
+```
+
+```{r setup_libPrep, include=TRUE}
+suppressPackageStartupMessages({
+  library(DESeq2)
+  library(DT)
+  library(edgeR)
+  library(EnhancedVolcano)
+  library(ggplot2)
+  library(ggvenn)
+  library(gplots)
+  library(grDevices)
+  library(gridExtra)
+  library(plotly)
+  library(RColorBrewer)
+  library(reshape2)
+  library(tximport)
+  library(tximportData)
+
+  library(statmod)
+  library(apeglm)
+})
+
+# Print R version
+print(paste("R version:", R.version.string))
+
+
+options(
+  DT.options = list(
+    columnDefs = list(list(className = 'dt-center', targets = "_all")),
+    scrollX = TRUE,
+    # pageLength = 5,
+    language = list(search = 'Filter:')
+    )
+  )
+
+
+# Numerical values
+fdr <- params$fdr
+min_count <- params$min_count
+conditionN <- params$conditionN
+topNGenes <- params$topNGenes
+log2FCT <- params$log2FCT
+
+# Input data
+countFilePath_SALMON <- params$countFilePath_SALMON
+coldata <- params$coldata
+
+t2gPath <- params$t2gPath
+annotated <- params$annotated
+# annotated$ensembl_gene_id
+# Kepp only unique genes, or the first gene if there are multiple
+annotated <- annotated[!duplicated(annotated$ensembl_gene_id), ]
+
+formula <- params$formula
+
+r_output <- params$output
+if (r_output == "") {
+    r_output <- "."
+}
+
+salmon_folder <- "/SALMON"
+# Create SALMON folder if it does not exist
+if (!dir.exists(paste0(r_output, salmon_folder))) {
+    dir.create(paste0(r_output, salmon_folder))
+}
+# Output paths
+SALMON_edgeR.csv <- paste0(r_output, salmon_folder, "/SALMON_edgeR.csv")
+SALMON_edgeR_counts.csv <- paste0(r_output, salmon_folder, "/SALMON_edgeR_counts.csv")
+SALMON_DESeq2.csv <- paste0(r_output, salmon_folder, "/SALMON_DESeq2.csv")
+SALMON_DESeq2_counts.csv <- paste0(r_output, salmon_folder, "/SALMON_DESeq2_counts.csv")
+
+common_df.csv <- paste0(r_output, salmon_folder, "/common_sig_genes.csv")
+common_df_both.csv <- paste0(r_output, salmon_folder, "/common_sig_DE_genes.csv")
+
+# Data inport
+salmon_data <- paste0(countFilePath_SALMON, "/", coldata[[1]], "/quant.sf")
+names(salmon_data) <- coldata[[1]]
+# Check if all samples exists
+exists <- sapply(salmon_data, file.exists)
+# Remove non-existing samples
+salmon_data <- salmon_data[exists]
+
+# Find all "/quant.sf" files
+salmon_data_present <- list.files(countFilePath_SALMON, recursive = TRUE, pattern = "quant.sf", full.names = TRUE)
+
+tx2gene <- read.delim(t2gPath, header = FALSE)
+tx2gene <- tx2gene[c(1,2)]
+
+countdata_SALMON <- tximport(salmon_data, type = "salmon", tx2gene = tx2gene)
+countdata_SALMON <- as.data.frame(countdata_SALMON$counts)
+
+colnames(countdata_SALMON) <- gsub(colnames(countdata_SALMON), pattern = "\\.", replacement = "-")
+rownames(countdata_SALMON) <- sub('\\.[0-9]*$', '', rownames(countdata_SALMON))
+
+datatable(
+    coldata,
+    caption = "Samplesheet",
+    # rownames = NA,
+    extensions = 'FixedColumns'
+)
+# Check if all samples are present in the countdata
+# cat(paste("All samples:", paste(coldata[, 1], collapse = "\n"), sep = "\n"))
+cat(paste("Countdata samples:", paste(colnames(countdata_SALMON), collapse = "\n"), sep = "\n"))
+cat(paste("Extra samples in samplesheet:", 
+    paste(names(exists)[!exists], collapse = "\n"), sep = "\n"))
+cat(paste("Extra samples in countdata:",
+    paste(salmon_data_present[!salmon_data_present %in% salmon_data], collapse = "\n"), sep = "\n"))
+
+# Remove samples that are not present in the countdata but are in countdata
+coldata <- coldata[salmon_data %in% salmon_data_present, ]
+# Remove samples that are not present in the samplesheet but are in countdata
+countdata_SALMON <- countdata_SALMON[, coldata[, 1]]
+
+test_samples <- data.frame(
+    Samplesheet_samples = coldata[, 1],
+    Countdata_samples = colnames(countdata_SALMON)
+)
+datatable(
+    test_samples,
+    caption = "Samples that are present in both samplesheet and countdata",
+    # rownames = NA,
+    extensions = 'FixedColumns'
+)
+
+# Color & size
+col_vector <- grDevices::colors()[grep('gr(a|e)y', grDevices::colors(), invert = T)]
+n <- length(unique(coldata[, 1])) + length(unique(coldata[, conditionN]))
+sub_col_vector <- sample(size = n, col_vector)
+
+```
+
+The formula used to model gene expression in this analysis is `r paste(formula)`.
+
+# SALMON report
+
+## Raw data exploration
+
+Gene with the highest expression across all samples
+
+```{r SALMON_topGene}
+topGene <- which.max(rowSums(countdata_SALMON))
+print(topGene)
+
+datatable(
+    t(countdata_SALMON[topGene, ]),
+    # rownames = NA,
+    extensions = 'FixedColumns'
+)
+```
+
+We can investigate this data a bit more using some of the basic R functions before going on to use more sophisticated analysis tools.
+First we will calculate the mean for each gene for each condition and plot them comparativly.
+
+```{r SALMON_get_means}
+# Get unique values in the "Treatment" column
+unique_treatments <- unique(coldata[, conditionN])
+
+gene_means <- sapply(unique_treatments, function(treatment) {
+    rowMeans(countdata_SALMON[, coldata[, 1][coldata[, conditionN] == treatment]])
+})
+gene_means <- data.frame(gene_means)
+
+# Generate all pairwise combinations of mean names
+mean_combinations <- combn(unique_treatments, 2, simplify = FALSE)
+
+plot_list <- list()
+
+# Generate plots for each mean combination
+for (i in seq_along(mean_combinations)) {
+    mean_x <- mean_combinations[[i]][1]
+    mean_y <- mean_combinations[[i]][2]
+
+    # Create a scatterplot for the mean comparison
+    p <- ggplot(gene_means, aes_string(x = mean_x, y = mean_y)) +
+        geom_point() +
+        scale_y_continuous(trans = 'log10') +
+        scale_x_continuous(trans = 'log10') +
+        labs(x = mean_x, y = mean_y) +
+        theme_bw()
+
+    # Store the plot in the list
+    plot_list[[i]] <- p
+}
+
+# Arrange and display the plots
+grid.arrange(grobs = plot_list, nrow = length(mean_combinations))
+```
+
+### Raw differential gene expression
+
+We can find candidate differentially expressed genes by looking for genes with a large change between samples. 
+A common threshold used is log2 fold change more than `r log2FCT` or less than `r -log2FCT`. 
+We will calculate log2 fold change for all the genes and colour the genes with log2 fold change of more than 2 or 
+less than -2 on the plot.
+
+First, check for genes with a mean expression of 0. Putting zeroes into the log2 fold change calculation will produce NAs, 
+so we might want to remove these genes. Note: this is for mathematical reasons, although different software may produce 
+different results when you try to do `log2(0)`.
+
+how many genes have a mean 0?
+```{r SALMON_count_expressed_0}
+print(
+    apply(gene_means, 2, function(x) {
+        sum(x <= 0)
+    })
+)
+```
+
+how many genes have a mean above 0?
+
+```{r SALMON_count_expressed_1}
+print(
+    apply(gene_means, 2, function(x) {
+        sum(x > 0)
+    })
+)
+```
+
+```{r SALMON_subset_nonzero}
+print(paste("Number of genes befor filtering:", nrow(gene_means)))
+
+# Remove genes with a mean of 0
+gene_means[gene_means == 0] <- NA
+gene_means <- na.omit(gene_means)
+
+print(paste("Number of genes after filtering:", nrow(gene_means)))
+```
+
+Mathematically things work out better for us when we test things on the log scale.
+On the absolute scale, upregulation goes from 1 to infinity, while downregulation is bounded by 0 and 1. On the log scale,
+upregulation goes from 0 to infinity, and downregulation goes from 0 to negative infinity. Let's compute a log-base-2 of the fold change.
+
+When we do this we'll see some `Inf` and `-Inf` values. This is what happens when we take `log2(Inf)` or `log2(0)`.
+
+```{r SALMON_log2FC}
+gene_log <- data.frame(matrix(nrow = nrow(gene_means), ncol = 0))
+plot_list_add <- list()
+
+for (i in seq_along(mean_combinations)) {
+    mean_x <- mean_combinations[[i]][1]
+    mean_y <- mean_combinations[[i]][2]
+
+    comb_name <- paste0("log2FC_", mean_x, "_", mean_y)
+    gene_log[, comb_name] <- log2(gene_means[, mean_x] / gene_means[, mean_y])
+
+    # Report
+    print(paste0(comb_name, " - Differently expresed: ", sum(abs(gene_log) > 2)))
+    print(paste0(comb_name, " - Underexpresed expresed: ", sum(gene_log < -2)))
+    print(paste0(comb_name, " - Overexpresed expresed: ", sum(gene_log > 2)))
+
+    gene_sig <- gene_means[abs(gene_log) > log2FCT, ]
+
+    # color significant genes
+    plot_list[[i]] <- plot_list[[i]] +
+        geom_point(data = gene_sig, aes(col = "red"), size = 2) +
+        theme(legend.position = "none")
+}
+
+# Arrange and display the plots
+grid.arrange(grobs = plot_list, nrow = length(mean_combinations))
+```
+
+```{r SALMON_log2FC_top}
+gene_means <- cbind(gene_means, gene_log)
+gene_means$ID <- rownames(gene_means)
+gene_means <- merge(gene_means, annotated, by.x = "ID", by.y = "ensembl_gene_id")
+
+indx <- order(abs(gene_log[, 1]), decreasing = TRUE)
+gene_means <- gene_means[indx, ]
+
+# print(head(gene_means, topNGenes))
+datatable(
+    gene_means,
+    rownames = NA,
+    extensions = 'FixedColumns'
+)
+# TODO: save?
+```
+
+
+## edgeR analysis
+
+### edgeR DEList
+
+
+For easy manipulation, we put the data into a DGEList object
+
+```{r SALMON_edgeR_DEList}
+# Create DEList
+y_SALMON <- DGEList(counts = countdata_SALMON)
+# print(y_SALMON)
+
+all_genes_unique <- length(rownames(y_SALMON$counts)) == length(unique(rownames(y_SALMON$counts)))
+print(paste0("Are all genes unique in counts: ", all_genes_unique))
+```
+
+### edgeR filter
+
+All datasets will include a mix of genes that are expressed and those that are not expressed. Whilst it is of interest 
+to examine genes that are expressed in one condition but not in another, some genes are unexpressed throughout all samples.
+Filter genes with at least `r min_count` counts.
+
+```{r SALMON_edgeR_Filtration}
+cpm <- cpm(y_SALMON)
+lcpm <- cpm(y_SALMON, log = TRUE)
+L <- mean(y_SALMON$samples$lib.size) * 1e-6
+M <- median(y_SALMON$samples$lib.size) * 1e-6
+# summary(lcpm)
+print(paste("mean:", L, " --- median:", M))
+
+min_count <- 10
+keep_SALMON <- filterByExpr(y_SALMON, min.count = min_count)
+missing_gene <- table(rowSums(y_SALMON$counts == 0))
+missing_sample_0 <- colSums(y_SALMON$counts == 0)
+missing_sample_min <- colSums(y_SALMON$counts < min_count)
+
+print(paste("Max:", length(keep_SALMON)))
+print(paste("To keep:", sum(keep_SALMON)))
+print(paste("To keep [%]:", round((sum(keep_SALMON) / length(keep_SALMON)) * 100), "%"))
+
+# invisible(dev.off())
+# par(mfrow = c(1, 1))
+plot(missing_gene)
+# invisible(dev.off())
+
+y_SALMON <- y_SALMON[keep_SALMON, , keep.lib.sizes = FALSE]
+```
+
+Genes that do not have a worthwhile number of reads in any sample should be filtered out of the downstream analyses. 
+There are several reasons for this. From a biological point of view, genes that not expressed at a biologically meaningful 
+level in any condition are not of interest and are therefore best ignored. From a statistical point of view, removing low count genes 
+allows the mean-variance relationship in the data to be estimated with greater reliability and also reduces the number of 
+statistical tests that need to be carried out in downstream analyses looking at differential expression.
+
+```{r SALMON_edgeR_Missing, fig.width=10, fig.height=5}
+missing_sample_0_df <- data.frame(
+  sample = names(missing_sample_0),
+  genes = missing_sample_0
+)
+missing_sample_min_df <- data.frame(
+  sample = names(missing_sample_min),
+  genes = missing_sample_min
+)
+
+# Missing plot
+p1 <- ggplot(data = missing_sample_0_df, aes(x = sample, y = genes)) +
+  geom_bar(stat = "identity") +
+  geom_hline(aes(yintercept = mean(genes), col = "mean")) +
+  geom_hline(aes(yintercept = median(genes), col = "median")) +
+  theme_bw()
+ggplotly(p1)
+invisible(dev.off())
+
+p2 <- ggplot(data = missing_sample_min_df, aes(x = sample, y = genes)) +
+  geom_bar(stat = "identity") +
+  geom_hline(aes(yintercept = mean(genes), col = "mean")) +
+  geom_hline(aes(yintercept = median(genes), col = "median")) +
+  theme_bw()
+ggplotly(p2)
+# invisible(dev.off())
+```
+
+Plotting the distribution log-CPM values shows that a sizeable proportion of genes within each sample are either 
+unexpressed or lowly-expressed with log-CPM values that are small or negative.
+
+```{r SALMON_edgeR_Missing_diss, fig.width=10, fig.height=5}
+samplenames <- coldata[[1]]
+lcpm.cutoff <- log2(10 / M + 2 / L)
+nsamples <- ncol(y_SALMON)
+col <- brewer.pal(nsamples, "Paired")
+par(mfrow = c(1, 2))
+plot(density(lcpm[, 1]), col = col[1], lwd = 2, ylim = c(0, 0.26), las = 2, main = "", xlab = "")
+title(main = "A. Raw data", xlab = "Log-cpm")
+abline(v = lcpm.cutoff, lty = 3)
+for (i in 2:nsamples) {
+  den <- density(lcpm[, i])
+  lines(den$x, den$y, col = col[i], lwd = 2)
+}
+# legend("topright", samplenames, text.col = col, bty = "n")
+
+lcpm <- cpm(y_SALMON, log = TRUE)
+plot(density(lcpm[, 1]), col = col[1], lwd = 2, ylim = c(0, 0.26), las = 2, main = "", xlab = "")
+title(main = "B. Filtered data", xlab = "Log-cpm")
+abline(v = lcpm.cutoff, lty = 3)
+for (i in 2:nsamples) {
+  den <- density(lcpm[, i])
+  lines(den$x, den$y, col = col[i], lwd = 2)
+}
+invisible(dev.off())
+# legend("topright", samplenames, text.col = col, bty = "n")
+```
+
+### edgeR normalization
+
+TMM normalization is applied to this dataset to account for compositional difference between
+the libraries. For example, samples processed in the first batch of an experiment can have higher 
+expression overall when compared to samples processed in a second batch.
+
+```{r SALMON_edgeR_normalization}
+y_SALMON <- calcNormFactors(y_SALMON, design, method = "TMM")
+
+x2 <- y_SALMON
+x2$samples$norm.factors <- 1
+x2$counts[, 1] <- ceiling(x2$counts[, 1] * fdr)
+x2$counts[, 2] <- x2$counts[, 2] * 5
+
+par(mfrow = c(1, 2))
+lcpm <- cpm(x2, log = TRUE)
+boxplot(lcpm, las = 2, col = col, main = "")
+title(main = "Unnormalised data", ylab = "Log-cpm")
+x2 <- calcNormFactors(x2)
+
+lcpm <- cpm(x2, log = TRUE)
+boxplot(lcpm, las = 2, col = col, main = "")
+title(main = "Normalised data", ylab = "Log-cpm")
+
+invisible(dev.off())
+```
+
+
+```{r SALMON_edgeR_normalization_plot_silent, fig.show='hide'}
+par(mfrow = c(1, 1))
+mds <- plotMDS(
+  y_SALMON,
+  labels = coldata[[1]],
+  col = as.numeric(as.factor(coldata[[1]])),
+  cex = 0.75
+)
+```
+```{r SALMON_edgeR_normalization_plot}
+toplot <- data.frame(
+    Dim1 = mds$x,
+    Dim2 = mds$y,
+    Group = as.factor(coldata[[conditionN]]),
+    Sample = coldata[['Patient_ID']]
+    )
+
+gp <- ggplot(toplot, aes(Dim1, Dim2, color = Group))
+gp <- gp +
+    geom_hline(aes(yintercept = 0), colour = "grey") +
+    geom_vline(aes(xintercept = 0), colour = "grey") +
+    geom_point(size = 4) +
+    xlab("Dimension 1") +
+    ylab("Dimension 2") +
+    ggtitle("MDS plot\n") +
+    theme_bw()
+
+gp <- gp +
+geom_point(aes(toplot$Dim1, toplot$Dim2, color = toplot$Sample), size = 2) +
+scale_color_manual(values = sub_col_vector)
+
+ggplotly(gp)
+```
+
+
+The first step of an analysis should be to examine the samples for outliers and for other
+relationships. The function plotMDS produces a plot in which distances between samples
+correspond to leading biological coefficient of variation (BCV) between those samples.
+
+
+### edgeR estimate dispersion
+
+The square root of the common dispersion gives the coefficient of variation of biological
+variation.
+The dispersion estimates can be viewed in a BCV plot.
+
+```{r SALMON_edgeR_dispersion}
+y_SALMON <- estimateDisp(y_SALMON, design, robust = TRUE)
+y_SALMON$common.dispersion
+
+plotBCV(y_SALMON)
+```
+
+Here the common dispersion is found to be `r round(y_SALMON$common.dispersion, digits = 5)`, so the coefficient of biological
+variation is around `r round(sqrt(y_SALMON$common.dispersion), digits = 5)`.
+
+
+### edgeR fitting & testing
+
+```{r SALMON_edgeR_Test1}
+# Fit genewise glms
+fit_SALMON <- glmQLFit(y_SALMON, design)
+
+# Conduct likelihood ratio tests for treated vs pre-tretment tissue differences
+lrt <- glmLRT(fit_SALMON)
+
+plotMD(lrt)
+abline(h = c(-1, 1), col = "blue")
+```
+
+
+### edgeR correction
+
+The genewise tests are for treated vs pre-treated differential expression, adjusting for baseline
+differences between the patients. The tests can be viewed as analogous to paired
+t-tests. The top DE tags have tiny p-values and FDR values, as well as large fold changes.
+
+```{r SALMON_edgeR_correction}
+results_SALMON_edgeR <- topTags(lrt, adjust.method = "BH", n = nrow(lrt$table))
+
+results_SALMON_edgeR <- na.omit(results_SALMON_edgeR)
+results_SALMON_edgeR <- data.frame(results_SALMON_edgeR)
+results_SALMON_edgeR$ID <- rownames(results_SALMON_edgeR)
+
+head(results_SALMON_edgeR[, -ncol(results_SALMON_edgeR)])
+```
+
+The total number of differentially expressed genes at `r fdr` FDR:
+
+```{r SALMON_edgeR_correction_stats}
+summary(decideTests(lrt))
+```
+
+### edgeR P-values distribution
+
+Histogram of the unadjusted and adjusted p-values.
+
+```{r SALMON_edgeR_hist}
+hp <- ggplot(results_SALMON_edgeR) +
+  geom_histogram(aes(PValue, fill = "p-value"), colour = "grey20", alpha = 0.5, stat = "bin") +
+  geom_histogram(aes(FDR, fill = "padj"), colour = "grey20", alpha = 0.5, stat = "bin") +
+  scale_fill_manual(
+    name = "group", values = c("p-value" = "steelblue", "padj" = "grey20"), labels = c("a" = "p-value", "b" = "padj")
+    ) +
+  geom_vline(xintercept = fdr, colour = "red") +
+  theme_bw()
+
+ggplotly(hp)
+```
+
+```{r SALMON_edgeR_hist_table}
+## Split features by different adjusted p-value cutoffs
+padj_table <- lapply(c(1e-04, 0.001, 0.01, 0.025, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5,
+    0.6, 0.7, 0.8, 0.9, 1), function(x) {
+    data.frame('Cut' = x, 'Count' = sum(results_SALMON_edgeR$FDR <= x, na.rm = TRUE))
+})
+padj_table <- do.call(rbind, padj_table)
+
+datatable(
+  padj_table,
+  rownames = NA,
+  extensions = 'FixedColumns'
+)
+```
+
+```{r SALMON_edgeR_results_summary}
+print(paste(
+  "Number of genes with significant p-value:",
+  sum(results_SALMON_edgeR$PValue < fdr)
+  ))
+
+EDGER_Nsig <- sum(results_SALMON_edgeR$FDR < fdr)
+print(paste(
+  "Number of genes with significant adjusted p-value:",
+  EDGER_Nsig
+  ))
+```
+
+Annotate discovered genes.
+```{r SALMON_edgeR_annotate}
+# define biomart object
+results_SALMON_edgeR <- merge(results_SALMON_edgeR, annotated, by.x = "ID", by.y = "ensembl_gene_id")
+results_SALMON_edgeR <- results_SALMON_edgeR[order(results_SALMON_edgeR$FDR), ]
+results_SALMON_edgeR <- results_SALMON_edgeR[results_SALMON_edgeR$PValue <= fdr, ]
+
+write.table(results_SALMON_edgeR, file = SALMON_edgeR.csv, append = FALSE, quote = FALSE, sep = "\t", row.names = FALSE)
+
+counts <- data.frame(cpm(lrt))
+counts$ID <- rownames(counts)
+results_SALMON_edgeR_counts <- merge(results_SALMON_edgeR, counts, by = "ID")
+write.table(results_SALMON_edgeR_counts,
+  file = SALMON_edgeR_counts.csv,
+  append = FALSE, quote = FALSE, sep = "\t", row.names = FALSE
+)
+```
+
+### edgeR volcano plot
+
+[Volcano plots](https://en.wikipedia.org/wiki/Volcano_plot_(statistics)) are another (sometimes preferred) way of visulizing the DE results. 
+It clearly identifies the highest changing genes from the results.
+
+```{r SALMON_edgeR_VC}
+EnhancedVolcano(
+    results_SALMON_edgeR,
+    lab = "",
+    x = 'logFC',
+    y = 'FDR',
+    title = 'SALMON-EdgeR results',
+    subtitle = "",
+    legendPosition = "top",
+    pCutoff = fdr
+    # title = 'SALMON-DESeq results'
+    # subtitle = "Differential expression"
+)
+```
+
+### edgeR results
+
+```{r SALMON_edgeR_results}
+datatable(
+    results_SALMON_edgeR,
+    rownames = NA,
+    extensions = 'FixedColumns'
+)
+```
+
+
+## DESeq2 analysis
+
+DESeq2 is an R package for analyzing count-based NGS data like RNA-seq. It is available 
+from [Bioconductor](http://www.bioconductor.org/). Bioconductor is a project to provide tools for analysing 
+high-throughput genomic data including RNA-seq, ChIP-seq and arrays. 
+You can explore Bioconductor packages [here](http://www.bioconductor.org/packages/release/BiocViews.html#___Software).
+Analysis sourced from 
+[Vignette](http://bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#input-data) 
+and [Github](https://gist.github.com/stephenturner/f60c1934405c127f09a6).
+
+### Preparing outputs for exploration
+
+Create a coldata frame and instantiate the DESeqDataSet
+
+```{r SALMON_DESeq_DESeqDataSet}
+dds <- DESeqDataSetFromMatrix(countData = round(countdata_SALMON), colData = coldata, design = design)
+
+dds
+```
+
+### DESeq filter
+
+```{r SALMON_DESeq_filter}
+keep <- rowSums(counts(dds)) >= min_count
+dds <- dds[keep, ]
+dds
+```
+
+
+### DESeq pipeline
+
+```{r SALMON_DESeq_Pipe}
+dds <- DESeq(dds)
+dds
+```
+
+### DESeq dispersion
+
+This plot shows the fitting of dispersion estimates for all genes by DESeq2. A better fit would mean 
+more reliable results.
+
+```{r SALMON_DESeq_dispersion}
+plotDispEsts(dds, main = "Dispersion plot")
+```
+
+### DESeq regularization
+
+Regularized log transformation for clustering/heatmaps, etc
+
+```{r SALMON_DESeq_regularization}
+rld <- rlogTransformation(dds)
+# head(assay(rld))
+hist(assay(rld))
+```
+
+### DESeq Heatmap
+
+This plot shows how samples are clustered based on their euclidean distance using the regularized 
+log transformed count data. This figure gives an overview of how the samples are hierarchically clustered. 
+It is a complementary figure to the PCA plot.
+
+```{r SALMON_DESeq_hm}
+condition <- factor(coldata[[conditionN]])
+mycols <- brewer.pal(8, "Dark2")[1:length(unique(condition))]
+
+# Sample distance heatmap
+sampleDists <- as.matrix(dist(t(assay(rld))))
+heatmap.2(as.matrix(sampleDists),
+  key = F, trace = "none",
+  col = colorpanel(100, "#1109ee", "#ffffff"),
+  ColSideColors = mycols[condition], RowSideColors = mycols[condition],
+  margin = c(10, 10), main = "Sample Distance Matrix"
+)
+```
+
+### DESeq PCA
+
+PCA plot using the first two principal components that explain the variability in the data using the regularized 
+log count data. If you are unfamiliar with principal component analysis, 
+you might want to check this [interactive explanation](http://setosa.io/ev/principal-component-analysis/). 
+
+```{r SALMON_DESeq_pca}
+# n <- length(unique(coldata[, 1])) + length(unique(coldata[, conditionN]))
+PCAdata <- DESeq2::plotPCA(rld, intgroup = colnames(coldata)[conditionN], returnData = TRUE)
+percentVar <- round(100 * attr(PCAdata, "percentVar"))
+
+mat <- match(PCAdata$name, coldata[, 1])
+PCAdata$sample <- as.character(coldata$Patient_ID[mat])
+
+gp <- ggplot(PCAdata, aes(PC1, PC2, color = condition))
+gp <- gp +
+    geom_hline(aes(yintercept = 0), colour = "grey") +
+    geom_vline(aes(xintercept = 0), colour = "grey") +
+    geom_point(size = 4) +
+    xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+    ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+    ggtitle("PCA\n")+
+    theme_bw()
+
+gp <- gp +
+geom_point(aes(PCAdata$PC1, PCAdata$PC2, color = PCAdata$sample), size = 2) +
+scale_color_manual(values = sub_col_vector)
+
+ggplotly(gp)
+```
+
+In this case, the first and second principal component 
+explain `r percentVar[1]` and `r percentVar[2]` percent of the variance respectively.
+
+### DESeq DE genes
+
+Get differential expression results
+
+```{r SALMON_DESeq_genes}
+res <- results(dds)
+res <- na.omit(res)
+```
+
+How many genes are significant?
+
+```{r SALMON_DESeq_siggenes}
+table(res$padj < fdr)
+```
+
+### DESeq MA plot
+
+MA plots compare the mean of the normalized counts against the log fold change. 
+They show one point per feature. 
+The points are shown in blue if the feature has an adjusted p-value less than alpha, 
+that is, the statistically significant features are shown in blue.
+
+```{r SALMON_DESeq_MA}
+maplot <- function(res, thresh = fdr, labelsig = FALSE, textcx = 1, ...) {
+  with(res, plot(
+    baseMean, log2FoldChange, pch = 20, cex = .8, log = "x",
+    xlab = "Mean of Normalized Counts", ylab = "Log2 Fold Change", ...
+    ))
+  with(subset(res, padj < thresh), points(baseMean, log2FoldChange, col = "blue", pch = 20, cex = 1))
+  if (labelsig) {
+    require(calibrate)
+    with(subset(res, padj < thresh), textxy(baseMean, log2FoldChange, labs = Gene, cex = textcx, col = 2))
+  }
+}
+
+maplot(res, main = "MA Plot")
+# invisible(dev.off())
+# TODO: Plot not showing
+
+# Package
+plotMA(
+  res, ylim = c(-2, 2), cex = .8,
+  xlab = "Mean of Normalized Counts",
+  ylab = "Log Fold Change"
+  )
+invisible(dev.off())
+
+# Shrinken low values
+resAshT <- lfcShrink(dds, coef = colnames(design)[ncol(design)], type = "apeglm")
+plotMA(
+  resAshT, ylim = c(-3, 3), cex = .8,
+  xlab = "Mean of Normalized Counts",
+  ylab = "Shrinken Log Fold Change"
+  )
+abline(h = c(-1, 1), col = "dodgerblue", lwd = 2)
+invisible(dev.off())
+```
+
+```{r SALMON_DESeq_formating}
+## Order by adjusted p-value
+res <- res[order(res$padj), ]
+results_SALMON_DESeq2 <- as.data.frame(res)
+results_SALMON_DESeq2$ID <- rownames(results_SALMON_DESeq2)
+## Merge with normalized count data
+# results_SALMON_DESeq2 <- merge(as.data.frame(res), as.data.frame(counts(dds, normalized = TRUE)), by = "row.names", sort = FALSE)
+# names(results_SALMON_DESeq2)[1] <- "ID"
+```
+
+### DESeq P-values distribution
+
+Histogram of the unadjusted and adjusted p-values.
+
+```{r SALMON_DESeq_hist}
+hp <- ggplot(results_SALMON_DESeq2) +
+  geom_histogram(aes(pvalue, fill = "p-value"), colour = "grey20", alpha = 0.5, stat = "bin") +
+  geom_histogram(aes(padj, fill = "padj"), colour = "grey20", alpha = 0.5, stat = "bin") +
+  scale_fill_manual(
+    name = "group", values = c("p-value" = "steelblue", "padj" = "grey20"), labels = c("a" = "p-value", "b" = "padj")
+    ) +
+  geom_vline(xintercept = fdr, colour = "red") +
+  theme_bw()
+
+ggplotly(hp)
+```
+
+```{r SALMON_DESeq_hist_table}
+## Split features by different adjusted p-value cutoffs
+padj_table <- lapply(c(1e-04, 0.001, 0.01, 0.025, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5,
+    0.6, 0.7, 0.8, 0.9, 1), function(x) {
+    data.frame('Cut' = x, 'Count' = sum(results_SALMON_DESeq2$padj <= x, na.rm = TRUE))
+})
+padj_table <- do.call(rbind, padj_table)
+
+datatable(
+  padj_table,
+  rownames = NA,
+  extensions = 'FixedColumns'
+)
+```
+
+```{r SALMON_DESeq_results}
+print(paste(
+  "Number of genes with significant p-value:",
+  sum(results_SALMON_DESeq2$pvalue < fdr)
+  ))
+
+DESEQ2_Nsig <- sum(results_SALMON_DESeq2$padj < fdr)
+print(paste(
+  "Number of genes with significant adjusted p-value:",
+  DESEQ2_Nsig
+  ))
+```
+
+```{r SALMON_DESeq_results_annotation}
+# Annotate gnes and save to table
+results_SALMON_DESeq2 <- merge(results_SALMON_DESeq2, annotated, by.x = "ID", by.y = "ensembl_gene_id")
+results_SALMON_DESeq2 <- results_SALMON_DESeq2[order(results_SALMON_DESeq2$padj), ]
+write.table(results_SALMON_DESeq2, file = SALMON_DESeq2.csv, append = FALSE, quote = FALSE, sep = "\t", row.names = FALSE)
+
+counts <- data.frame(counts(dds, normalized = TRUE))
+counts$ID <- rownames(counts)
+results_SALMON_DESeq_counts <- merge(results_SALMON_DESeq2, counts, by = "ID")
+write.table(results_SALMON_DESeq_counts, file = SALMON_DESeq2_counts.csv,
+  append = FALSE, quote = FALSE, sep = "\t", row.names = FALSE
+  )
+```
+
+### DESeq volcano plot
+
+[Volcano plots](https://en.wikipedia.org/wiki/Volcano_plot_(statistics)) are another (sometimes preferred) way of visulizing the DE results. 
+It clearly identifies the highest changing genes from the results.
+
+```{r SALMON_DESeq_VC}
+EnhancedVolcano(
+    results_SALMON_DESeq2,
+    lab = "",
+    x = 'log2FoldChange',
+    y = 'padj',
+    title = 'SALMON-DESeq results',
+    subtitle = "",
+    legendPosition = "top",
+    pCutoff = fdr
+    # title = 'SALMON-DESeq results'
+    # subtitle = "Differential expression"
+)
+```
+
+### DESeq results
+
+```{r SALMON_DESeq_DT}
+datatable(
+    results_SALMON_DESeq2,
+    rownames = NA,
+    extensions = 'FixedColumns'
+)
+```
+
+# Combined
+
+Venn Diagram of the DE genes from the different methods.
+For further analysis, we will use only the genes that are significant in the DESeq2 and edgeR methods.
+
+Comparison of DE genes acording to the adjusted p-value cutoff (`r fdr`).
+
+```{r Combined_prep}
+genes_DESeq2 <- results_SALMON_DESeq2$ID[results_SALMON_DESeq2$padj > fdr]
+genes_edgeR <- results_SALMON_edgeR$ID[results_SALMON_edgeR$FDR > fdr]
+genes_simple <- gene_means$ID[gene_means[, which(grepl("log2FoldChange", colnames(results_SALMON_DESeq2)))[1]] > log2FCT]
+
+D <- list(
+  genes_DESeq2 = genes_DESeq2,
+  genes_edgeR = genes_edgeR,
+  genes_simple = genes_simple
+  )
+
+ggvenn(
+  D,
+  show_percentage = TRUE,
+  fill_color = sub_col_vector
+  )
+
+# Create and save a dataframe with the common genes
+genes_common <- genes_DESeq2[genes_DESeq2 %in% genes_edgeR]
+
+# results_SALMON_DESeq2[results_SALMON_DESeq2$ID %in% "ENSG00000230417", ]
+
+row.names(results_SALMON_DESeq2) <- results_SALMON_DESeq2$ID
+row.names(results_SALMON_edgeR) <- results_SALMON_edgeR$ID
+
+results_SALMON_DESeq2_common <- results_SALMON_DESeq2[genes_common, ]
+results_SALMON_edgeR_common <- results_SALMON_edgeR[genes_common, ]
+
+common_df <- data.frame(
+  ID = row.names(results_SALMON_DESeq2_common),
+  log2FoldChange_DESeq2 = results_SALMON_DESeq2_common$log2FoldChange,
+  log2FoldChange_edgeR = results_SALMON_edgeR_common$logFC,
+  pvalue_DESeq2 = results_SALMON_DESeq2_common$pvalue,
+  pvalue_edgeR = results_SALMON_edgeR_common$PValue,
+  padj_DESeq2 = results_SALMON_DESeq2_common$padj,
+  padj_edgeR = results_SALMON_edgeR_common$FDR,
+  hgnc_symbol = results_SALMON_edgeR_common$hgnc_symbol,
+  description = results_SALMON_edgeR_common$description
+  )
+
+datatable(
+    common_df,
+    rownames = NA,
+    extensions = 'FixedColumns'
+)
+
+write.table(common_df, file = common_df.csv, append = FALSE, quote = FALSE, sep = "\t", row.names = FALSE)
+```
+
+Comparison of DE genes acording to the adjusted p-value cutoff (`r fdr`) and log2FoldChange (`r log2FCT`).
+
+```{r Combined_both} 
+genes_DESeq2 <- results_SALMON_DESeq2$ID[results_SALMON_DESeq2$padj > fdr & abs(results_SALMON_DESeq2$log2FoldChange) > log2FCT]
+genes_edgeR <- results_SALMON_edgeR$ID[results_SALMON_edgeR$FDR > fdr & abs(results_SALMON_edgeR$logCPM) > log2FCT]
+genes_simple <- gene_means$ID[gene_means[, which(grepl("log2FoldChange", colnames(results_SALMON_DESeq2)))[1]] > log2FCT]
+
+D <- list(
+  genes_DESeq2 = genes_DESeq2,
+  genes_edgeR = genes_edgeR,
+  genes_simple = genes_simple
+  )
+
+ggvenn(
+  D,
+  show_percentage = TRUE,
+  fill_color = sub_col_vector
+  )
+
+# Create and save a dataframe with the common genes
+genes_common <- genes_DESeq2[genes_DESeq2 %in% genes_edgeR]
+
+row.names(results_SALMON_DESeq2) <- results_SALMON_DESeq2$ID
+row.names(results_SALMON_edgeR) <- results_SALMON_edgeR$ID
+
+results_SALMON_DESeq2_common <- results_SALMON_DESeq2[genes_common, ]
+results_SALMON_edgeR_common <- results_SALMON_edgeR[genes_common, ]
+
+common_df <- data.frame(
+  ID = row.names(results_SALMON_DESeq2_common),
+  log2FoldChange_DESeq2 = results_SALMON_DESeq2_common$log2FoldChange,
+  log2FoldChange_edgeR = results_SALMON_edgeR_common$logFC,
+  pvalue_DESeq2 = results_SALMON_DESeq2_common$pvalue,
+  pvalue_edgeR = results_SALMON_edgeR_common$PValue,
+  padj_DESeq2 = results_SALMON_DESeq2_common$padj,
+  padj_edgeR = results_SALMON_edgeR_common$FDR,
+  hgnc_symbol = results_SALMON_edgeR_common$hgnc_symbol,
+  description = results_SALMON_edgeR_common$description
+  )
+
+datatable(
+    common_df,
+    rownames = NA,
+    extensions = 'FixedColumns'
+)
+
+write.table(common_df, file = common_df_both.csv, append = FALSE, quote = FALSE, sep = "\t", row.names = FALSE)
+```
+
+
+# Sources
+
+https://github.com/gantunes00/rnaseq-data-analysis-brb/blob/master/02-differential-expression.md
+
+
+https://4va.github.io/biodatasci/r-rnaseq-airway.html
+
+
+https://www.bioconductor.org/packages/release/bioc/vignettes/edgeR/inst/doc/edgeRUsersGuide.pdf
+
+
+http://bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html
+
+
+https://github.com/maxplanck-ie/snakepipes
+
+
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4937821/

@@ -14,14 +14,15 @@ To run, you will need to provide the following information:
     The name of the condition of interest (example: "Treatment").
     The path to the STAR-featureCounts or SALMON data.
     The output path.
-    The FDR value (optional, default = 0.05).
     The minimum count (optional, default = 10).
+    The FDR value (optional, default = 0.05).
+    The minimal Log2 fold change.
 
-The STAR-featureCounts should be combined into a counts.tsv file.
+The STAR-featureCounts should be combined into a `counts.tsv` file (column per sample, row per gene).
 Path to the SALMON files can be given directly -- the parent directory, which contains `sampleID/quant.sf`.
 Make sure the `sampleID` matches the one in `sample_info.csv`.
 
-To ensure the presence of all required R libraries simply crete conda env from the `environment.yaml`:
+To ensure the presence of all required R libraries simply crete a conda env from the `environment.yaml`:
 ```
 conda env create -f environment.yaml
 -or-

@@ -104,23 +104,32 @@ rownames(design) <- coldata[[1]]
 # Condition value column number
 conditionN <- which(col_names == conditionName)
 
+# Color & size
+col_vector <- grDevices::colors()[grep("gr(a|e)y", grDevices::colors(), invert = T)]
+n <- length(unique(coldata[, 1])) + length(unique(coldata[, conditionN]))
+sub_col_vector <- sample(size = n, col_vector)
+
 
 print("Running DE analysis")
+
 
 # DEBUGING: Save the R environment
 # save.image(file = "RNADE.RData")
 # base::load("RNADE.RData")
 
+
 # Run STAR analysis if path is given
 if (!is.null(STARdata)) {
     print("-- Running STAR-featureCounts analysis")
     rmarkdown::render(
-        "Rmd/STAR-featureCounts_report.Rmd",
+        "Rmd/edgeR_DEseq2_report.Rmd",
         output_format = "html_document",
         output_file = paste0(output, "/STAR-featureCounts_report.html"),
         clean = TRUE,
+        envir = new.env(),
         params = list(
-            countFilePath_STAR = STARdata,
+            data_origin = "STAR-featureCounts",
+            countFilePath = STARdata,
             output = output,
             coldata = coldata,
             conditionN = conditionN,
@@ -128,7 +137,9 @@ if (!is.null(STARdata)) {
             min_count = min_count,
             fdr = fdr,
             log2FCT = log2FCT,
-            formula = formula
+            formula = formula,
+            design = design,
+            sub_col_vector = sub_col_vector
             )
         )
 }
@@ -138,12 +149,14 @@ if (!is.null(STARdata)) {
 if (!is.null(SALMONdata)) {
     print("-- Running SALMON analysis")
     rmarkdown::render(
-        "Rmd/SALMON_report.Rmd",
+        "Rmd/edgeR_DEseq2_report.Rmd",
         output_format = "html_document",
         output_file = paste0(output, "/SALMON_report.html"),
         clean = TRUE,
+        envir = new.env(),
         params = list(
-            countFilePath_SALMON = SALMONdata,
+            data_origin = "SALMON",
+            countFilePath = SALMONdata,
             output = output,
             coldata = coldata,
             conditionN = conditionN,
@@ -152,7 +165,9 @@ if (!is.null(SALMONdata)) {
             fdr = fdr,
             log2FCT = log2FCT,
             formula = formula,
-            t2gPath = t2gPath
+            t2gPath = t2gPath,
+            design = design,
+            sub_col_vector = sub_col_vector
             )
         )
 }

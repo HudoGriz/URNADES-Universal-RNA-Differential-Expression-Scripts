@@ -209,7 +209,7 @@ datatable(
 )
 ```
 
-The formula used to model gene expression in this analysis is `r paste(formula)`.
+The formula used to model gene expression in this analysis is `r paste(formula, collapse = " ")`.
 
 # `r data_origin` report
 
@@ -564,7 +564,7 @@ fit_edgeR <- glmQLFit(y_edgeR, design)
 lrt <- glmLRT(fit_edgeR)
 
 plotMD(lrt)
-abline(h = c(-1, 1), col = "blue")
+abline(h = c(-log2FCT, log2FCT), col = "blue")
 ```
 
 
@@ -959,9 +959,9 @@ For further analysis, we will use only the genes that are significant in the DES
 Comparison of DE genes acording to the adjusted p-value cutoff (`r fdr`).
 
 ```{r Combined_prep}
-genes_DESeq2 <- results_DESeq2$ID[results_DESeq2$padj > fdr]
-genes_edgeR <- results_edgeR$ID[results_edgeR$FDR > fdr]
-genes_simple <- gene_means$ID[gene_means[, which(grepl("log2FoldChange", colnames(results_DESeq2)))[1]] > log2FCT]
+genes_DESeq2 <- results_DESeq2$ID[results_DESeq2$padj < fdr]
+genes_edgeR <- results_edgeR$ID[results_edgeR$FDR < fdr]
+genes_simple <- gene_means$ID[gene_means[, which(grepl("log2FoldChange", colnames(results_DESeq2)))[1]] >= log2FCT]
 
 D <- list(
   genes_DESeq2 = genes_DESeq2,
@@ -1010,9 +1010,9 @@ write.table(common_df, file = common_df.csv, append = FALSE, quote = FALSE, sep 
 Comparison of DE genes acording to the adjusted p-value cutoff (`r fdr`) and log2FoldChange (`r log2FCT`).
 
 ```{r Combined_both} 
-genes_DESeq2 <- results_DESeq2$ID[results_DESeq2$padj > fdr & abs(results_DESeq2$log2FoldChange) > log2FCT]
-genes_edgeR <- results_edgeR$ID[results_edgeR$FDR > fdr & abs(results_edgeR$logCPM) > log2FCT]
-genes_simple <- gene_means$ID[gene_means[, which(grepl("log2FoldChange", colnames(results_DESeq2)))[1]] > log2FCT]
+genes_DESeq2 <- results_DESeq2$ID[results_DESeq2$padj < fdr & abs(results_DESeq2$log2FoldChange) >= log2FCT]
+genes_edgeR <- results_edgeR$ID[results_edgeR$FDR < fdr & abs(results_edgeR$logCPM) >= log2FCT]
+genes_simple <- gene_means$ID[gene_means[, which(grepl("log2FoldChange", colnames(results_DESeq2)))[1]] >= log2FCT]
 
 D <- list(
   genes_DESeq2 = genes_DESeq2,

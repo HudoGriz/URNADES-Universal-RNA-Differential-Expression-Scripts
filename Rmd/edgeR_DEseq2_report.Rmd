@@ -97,10 +97,10 @@ coldata <- params$coldata
 
 t2gPath <- params$t2gPath
 
-annotated <- params$annotated
-# annotated$ensembl_gene_id
+annotated_ori <- params$annotated
+
 # Kepp only unique genes, or the first gene if there are multiple
-annotated <- annotated[!duplicated(annotated$ensembl_gene_id), ]
+annotated <- annotated_ori[!duplicated(annotated_ori$gene_id), ]
 
 
 # Design
@@ -130,7 +130,7 @@ common_df_both.csv <- paste0(r_output, output_folder, "/common_sig_DE_genes.csv"
 
 
 # Data inport
-if (data_origin == "STAR-featureCounts") {
+if (data_origin == "featureCounts") {
   
   countdata <- read.table(countFilePath, header = TRUE, check.names = TRUE)
   colnames(countdata) <- gsub(colnames(countdata), pattern = "\\.", replacement = "-")
@@ -207,6 +207,9 @@ datatable(
     # rownames = NA,
     extensions = "FixedColumns"
 )
+
+# Save enviorment
+save.image(paste0(r_output, output_folder, "/start_enviorment.RData"))
 ```
 
 The formula used to model gene expression in this analysis is `r paste(formula, collapse = " ")`.
@@ -269,9 +272,13 @@ grid.arrange(grobs = plot_list, nrow = length(mean_combinations))
 ### Raw differential gene expression
 
 We can find candidate differentially expressed genes by looking for genes with a large change between samples. 
-A common threshold used is log2 fold change more than `r log2FCT` or less than `r -log2FCT`. 
-We will calculate log2 fold change for all the genes and colour the genes with log2 fold change of more than 2 or 
-less than -2 on the plot.
+A common threshold used is log2 fold change of 2, that means we are testing if a gene's expression is 
+4 times greater in treatment compared to our control.
+
+We will use log2FCT = `r log2FCT`.
+
+We will calculate log2 fold change for all the genes and colour the genes with fold change of more than 
+`r log2FCT * 2` or less than `r -log2FCT * 2` on the plot.
 
 First, check for genes with a mean expression of 0. Putting zeroes into the log2 fold change calculation will produce NAs, 
 so we might want to remove these genes. Note: this is for mathematical reasons, although different software may produce 
@@ -325,8 +332,8 @@ for (i in seq_along(mean_combinations)) {
 
     # Report
     print(paste0(comb_name, " - Differently expresed: ", sum(abs(gene_log) > 2)))
-    print(paste0(comb_name, " - Underexpresed expresed: ", sum(gene_log < -2)))
-    print(paste0(comb_name, " - Overexpresed expresed: ", sum(gene_log > 2)))
+    print(paste0(comb_name, " - Underexpresed: ", sum(gene_log < -2)))
+    print(paste0(comb_name, " - Overexpresed: ", sum(gene_log > 2)))
 
     gene_sig <- gene_means[abs(gene_log) > log2FCT, ]
 
@@ -343,7 +350,7 @@ grid.arrange(grobs = plot_list, nrow = length(mean_combinations))
 ```{r log2FC_top}
 gene_means <- cbind(gene_means, gene_log)
 gene_means$ID <- rownames(gene_means)
-gene_means <- merge(gene_means, annotated, by.x = "ID", by.y = "ensembl_gene_id")
+gene_means <- merge(gene_means, annotated, by.x = "ID", by.y = "gene_id")
 
 indx <- order(abs(gene_log[, 1]), decreasing = TRUE)
 gene_means <- gene_means[indx, ]
@@ -638,7 +645,7 @@ print(paste(
 Annotate discovered genes.
 ```{r edgeR_annotate}
 # define biomart object
-results_edgeR <- merge(results_edgeR, annotated, by.x = "ID", by.y = "ensembl_gene_id")
+results_edgeR <- merge(results_edgeR, annotated, by.x = "ID", by.y = "gene_id")
 results_edgeR <- results_edgeR[order(results_edgeR$FDR), ]
 results_edgeR <- results_edgeR[results_edgeR$PValue <= fdr, ]
 
@@ -910,7 +917,7 @@ print(paste(
 
 ```{r DESeq_results_annotation}
 # Annotate gnes and save to table
-results_DESeq2 <- merge(results_DESeq2, annotated, by.x = "ID", by.y = "ensembl_gene_id")
+results_DESeq2 <- merge(results_DESeq2, annotated, by.x = "ID", by.y = "gene_id")
 results_DESeq2 <- results_DESeq2[order(results_DESeq2$padj), ]
 write.table(results_DESeq2, file = DESeq2.csv, append = FALSE, quote = FALSE, sep = "\t", row.names = FALSE)
 
@@ -994,7 +1001,7 @@ common_df <- data.frame(
   pvalue_edgeR = results_edgeR_common$PValue,
   padj_DESeq2 = results_DESeq2_common$padj,
   padj_edgeR = results_edgeR_common$FDR,
-  hgnc_symbol = results_edgeR_common$hgnc_symbol,
+  gene_symbol = results_edgeR_common$gene_symbol,
   description = results_edgeR_common$description
   )
 
@@ -1043,7 +1050,7 @@ common_df <- data.frame(
   pvalue_edgeR = results_edgeR_common$PValue,
   padj_DESeq2 = results_DESeq2_common$padj,
   padj_edgeR = results_edgeR_common$FDR,
-  hgnc_symbol = results_edgeR_common$hgnc_symbol,
+  gene_symbol = results_edgeR_common$gene_symbol,
   description = results_edgeR_common$description
   )
 

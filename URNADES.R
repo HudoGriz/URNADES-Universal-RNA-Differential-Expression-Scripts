@@ -12,8 +12,10 @@ print("Setting Parameters")
 # Define the option parser
 option_list <- list(
     make_option(c("--sampleInfoFilePath"), type = "character", default = NULL, help = "Path to sample info file"),
-    make_option(c("--STARdata"), type = "character", default = NULL, help = "Path to STAR data"),
-    make_option(c("--SALMONdata"), type = "character", default = NULL, help = "Path to SALMON data"),
+    make_option(c("--featureCounts"), type = "character", default = NULL,
+        help = "Path to STAR combined tsv [$featureCounts_data_path]"),
+    make_option(c("--SALMONdata"), type = "character", default = NULL,
+        help = "Path to SALMON data-folder [$SALMON_data_path/$SAMPLE/quant.sf]"),
     make_option(c("--conditionName"), type = "character", default = NULL, help = "Condition name"),
     make_option(c("--output"), type = "character", default = NULL, help = "Output path, use full path to a directory"),
 
@@ -22,8 +24,10 @@ option_list <- list(
     make_option(c("--min_count"), type = "integer", default = 10, help = "Minimum count"),
     make_option(c("--formula_input"), type = "character", default = NULL, help = "Formula input"),
 
-    make_option(c("--annotatedPath"), type = "character", default = "Data/annotated.csv", help = "Path to annotated.csv"),
-    make_option(c("--t2gPath"), type = "character", default = "Data/genes.filtered.t2g", help = "Path to genes.filtered.t2t")
+    make_option(c("--annotatedPath"), type = "character", default = "Data/annotated.csv",
+        help = "Path to annotation csv [gene_id, gene_symbol, description], gtf or gff"),
+    make_option(c("--t2gPath"), type = "character", default = "Data/genes.filtered.t2g",
+        help = "Path to genes.filtered.t2t")
 )
 
 # Parse the command line arguments
@@ -35,8 +39,8 @@ if (any(sapply(opt[c("sampleInfoFilePath", "conditionName", "output")], is.null)
     stop("Missing required arguments. Please provide values for --sampleInfoFilePath, --conditionName, --output")
 }
 
-if (is.null(opt["STARdata"]) & is.null(opt["SALMONdata"])) {
-    stop("Missing required arguments. Please provide --STARdata or --SALMONdata")
+if (is.null(opt["featureCounts"]) & is.null(opt["SALMONdata"])) {
+    stop("Missing required arguments. Please provide --featureCounts or --SALMONdata")
 }
 
 # Assign the parsed values to variables
@@ -48,7 +52,7 @@ annotatedPath <- opt$annotatedPath
 t2gPath <- opt$t2gPath
 
 sampleInfoFilePath <- opt$sampleInfoFilePath
-STARdata <- opt$STARdata
+featureCounts <- opt$featureCounts
 SALMONdata <- opt$SALMONdata
 output <- opt$output
 
@@ -64,24 +68,52 @@ if (!dir.exists(output)) {
 }
 output <- normalizePath(output)
 
+print("Getting annotation database")
+# Check file extensions
+if (grepl(".gtf$", annotatedPath)) {
+    print("Annotation database: GTF")
+    gtf <- rtracklayer::import(annotatedPath)
+
+    annotated <- data.frame(
+        gene_id = gtf$gene_id,
+        gene_symbol = gtf$gene_name,
+        description = gtf$description
+        )
+}
+
+if (grepl(".gff$", annotatedPath)) {
+    print("Annotation database: GFF")
+    gff <- rtracklayer::import(annotatedPath)
+
+    annotated <- data.frame(
+        gene_id = paste0("gene-", gff$gene),
+        gene_symbol = gff$gene,
+        description = gff$description
+        )
+}
+
 # BiomaRt anotation database
 # Check if file exists
-print("Getting annotation database")
-if (!file.exists(annotatedPath)) {
-    # Create annotated.csv
-    mart <- biomaRt::useMart(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
+if (grepl(".csv$", annotatedPath)) {
+    print("Annotation database: CSV")
+    if (!file.exists(annotatedPath)) {
+        print("Downloading annotation database")
+        # Create annotated.csv
+        mart <- biomaRt::useMart(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
 
-    annotated <- biomaRt::getBM(
-        attributes = c("ensembl_gene_id", "hgnc_symbol", "description"),
-        # filters = "ensembl_gene_id",
-        # values = results_STAR_edgeR$ID,
-        mart = mart
-        )
+        annotated <- biomaRt::getBM(
+            attributes = c("ensembl_gene_id", "hgnc_symbol", "description"),
+            # filters = "ensembl_gene_id",
+            # values = results_STAR_edgeR$ID,
+            mart = mart
+            )
 
-    # Save annotated as .csv
-    write.csv(annotated, file = annotatedPath, row.names = FALSE)
-} else {
-    annotated <- read.csv(annotatedPath, header = TRUE, stringsAsFactors = FALSE)
+        # Save annotated as .csv
+        names(annotated) <- c("gene_id", "gene_symbol", "description")
+        write.csv(annotated, file = annotatedPath, row.names = FALSE)
+    } else {
+        annotated <- read.csv(annotatedPath, header = TRUE, stringsAsFactors = FALSE)
+    }
 }
 
 
@@ -119,17 +151,17 @@ print("Running DE analysis")
 
 
 # Run STAR analysis if path is given
-if (!is.null(STARdata)) {
-    print("-- Running STAR-featureCounts analysis")
+if (!is.null(featureCounts)) {
+    print("-- Running featureCounts analysis")
     rmarkdown::render(
         "Rmd/edgeR_DEseq2_report.Rmd",
         output_format = "html_document",
-        output_file = paste0(output, "/STAR-featureCounts_report.html"),
+        output_file = paste0(output, "/featureCounts_report.html"),
         clean = TRUE,
         envir = new.env(),
         params = list(
-            data_origin = "STAR-featureCounts",
-            countFilePath = STARdata,
+            data_origin = "featureCounts",
+            countFilePath = featureCounts,
             output = output,
             coldata = coldata,
             conditionN = conditionN,

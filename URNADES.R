@@ -122,16 +122,13 @@ print("Getting experiment data")
 coldata <- read.table(sampleInfoFilePath, header = TRUE, stringsAsFactors = FALSE, sep = ",")
 col_names <- colnames(coldata)
 
-# Model design
-print("Setting model design")
+# Setting design formula
+print("Setting design formula")
 if (is.null(formula_input)) {
     formula <- as.formula(paste("~", paste(col_names[-1], collapse = " + ")))
 } else {
     formula <- as.formula(formula_input)
 }
-
-design <- model.matrix(formula, coldata)
-rownames(design) <- coldata[[1]]
 
 # Condition value column number
 conditionN <- which(col_names == conditionName)
@@ -170,7 +167,6 @@ if (!is.null(featureCounts)) {
             fdr = fdr,
             log2FCT = log2FCT,
             formula = formula,
-            design = design,
             sub_col_vector = sub_col_vector
             )
         )
@@ -198,7 +194,6 @@ if (!is.null(SALMONdata)) {
             log2FCT = log2FCT,
             formula = formula,
             t2gPath = t2gPath,
-            design = design,
             sub_col_vector = sub_col_vector
             )
         )

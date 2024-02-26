@@ -20,7 +20,6 @@ params:
     conditionN: 2
     log2FCT: 2
     topNGenes: 20
-    design: ""
     sub_col_vector: ""
 ---
 
@@ -105,7 +104,6 @@ annotated <- annotated_ori[!duplicated(annotated_ori$gene_id), ]
 
 # Design
 formula <- params$formula
-design <- params$design
 
 r_output <- params$output
 if (r_output == "") {
@@ -188,6 +186,15 @@ if (data_origin == "featureCounts") {
 
 }
 
+#Setting model design
+if (is.null(formula)) {
+    formula <- as.formula(paste("~", paste(colnames(coldata)[-1], collapse = " + ")))
+} else {
+    formula <- as.formula(formula)
+}
+
+design <- model.matrix(formula, coldata)
+rownames(design) <- coldata[[1]]
 
 # Visualize data
 datatable(
@@ -209,10 +216,10 @@ datatable(
 )
 
 # Save enviorment
-save.image(paste0(r_output, output_folder, "/start_enviorment.RData"))
+save(list = ls(all.names = TRUE), file = paste0(r_output, output_folder, "/start_enviorment.RData"))
 ```
 
-The formula used to model gene expression in this analysis is `r paste(formula, collapse = " ")`.
+The formula used to model gene expression in this analysis is: "`r paste(formula, collapse = " ")`".
 
 # `r data_origin` report
 

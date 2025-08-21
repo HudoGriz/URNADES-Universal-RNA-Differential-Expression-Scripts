@@ -1,0 +1,138 @@
+---
+title: "`r params$enrichment_source` RNA Differential expression enrichment analysis for: `r params$data_origin`"
+date: "Last Updated: `r format(Sys.time(), '%d, %B, %Y at %H:%M')`"
+output:
+    html_document:
+        toc: true
+        toc_float: true
+        code_folding: hide
+        theme: cerulean
+params:
+    data_origin: NULL
+    enrichment_source: NULL
+    expression_results: NULL
+    r_output: NULL
+    MSigDB: NULL
+    gs_collection: NULL
+
+---
+
+```{r setup, include=FALSE} 
+suppressPackageStartupMessages({
+  library(knitr)
+  library(tidyverse)
+  library(RColorBrewer)
+  library(fgsea)
+  library(msigdbr)
+})
+
+# expose params
+data_origin          <- params$data_origin
+enrichment_source    <- params$enrichment_source
+expression_results   <- params$expression_results
+r_output             <- params$r_output
+MSigDB               <- params$MSigDB
+gs_collection        <- params$gs_collection
+
+
+outdir <- file.path(r_output, data_origin)
+dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+
+
+
+# save R environment
+save(list = ls(all.names = TRUE), file = file.path(outdir, "start_environment_enrichment.RData"))
+# load(file = paste0("/home/ssld/Documents/URNADES-Universal-RNA-Differential-Expression-Scripts_new/output/SC_salmon/SALMON/start_environment_enrichment.RData"))
+```
+
+
+### Input Data
+
+We load the differential expression results.
+These results are expected to contain at least the following columns:
+
+- gene_symbol (mapped gene name)
+- log2FoldChange (direction and magnitude of change)
+- padj (adjusted p-value)
+
+```{r load_data}
+expression <- read.csv(expression_results, header = TRUE, sep = "\t")
+expression <- expression[!is.na(expression$gene_symbol), ]
+genes_in_expression <- expression$gene_symbol
+
+head(expression)
+```
+
+### Preparing gene sets
+
+We retrieve gene sets from MSigDB using msigdbr.
+
+```{r prep_genes}
+db <- MSigDB
+db_conv <- unique(db[, c("gene_symbol", "gs_name")])
+
+# Keep only genes present in the expression results
+db_common <- db_conv[db_conv$gene_symbol %in% genes_in_expression, ]
+
+# Filter gene sets with at least 5 members in common
+gs_name_counts <- table(db_common$gs_name)
+db_common_filtered <- db_common[db_common$gs_name %in% names(gs_name_counts[gs_name_counts > 5]), ]
+
+# Convert to list for fgsea
+gs_list <- split(x = db_common_filtered$gene_symbol, f = db_common_filtered$gs_name)
+```
+
+### Ranking Genes
+
+Genes are ranked by a signed statistic combining fold-change direction and adjusted significance:
+
+$Ranking = \text{sign}(\log_2 FC) \times -\log_{10}(padj)$
+
+```{r ranking_genes}
+rankings <- sign(expression$log2FoldChange) * (-log10(expression$padj))
+names(rankings) <- expression$gene_symbol
+rankings <- sort(rankings, decreasing = TRUE)
+
+# Handle infinite values
+max_ranking <- max(rankings[is.finite(rankings)])
+min_ranking <- min(rankings[is.finite(rankings)])
+rankings <- replace(rankings, rankings > max_ranking, max_ranking * 10)
+rankings <- replace(rankings, rankings < min_ranking, min_ranking * 10)
+rankings <- sort(rankings, decreasing = TRUE)
+
+summary(rankings)
+```
+
+### Running GSEA
+
+We run fgsea with the prepared gene sets and ranked list.
+Only pathways between 10 and 500 genes are considered.
+
+```{r run_gsea, message=FALSE, warning=FALSE}
+GSEAres <- fgsea(
+  pathways = gs_list,
+  stats = rankings,
+  scoreType = "std",
+  minSize = 10,
+  maxSize = 500,
+  nproc = 1
+)
+
+head(GSEAres[order(GSEAres$padj), ])
+```
+
+
+### Visualizing GSEA Results
+
+#### Normalized Enrichment Scores
+
+```{r gsea_results, echo=FALSE}
+GSEAres_filtered <- GSEAres %>% filter(padj < 0.05)
+
+ggplot(GSEAres_filtered, aes(reorder(pathway, NES), NES)) +
+  geom_col(aes(fill = padj < 0.05)) +
+  coord_flip() +
+  labs(x = "Pathway", y = "Normalized Enrichment Score",
+      title = paste("Significant pathways (", gs_collection, ")", sep = "")) + 
+  theme_minimal()
+```

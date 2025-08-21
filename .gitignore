@@ -1,6 +1,8 @@
 .vscode/
 .Rprofile
 
+scRNA
+
 renv/
 notes.txt
 output/
@@ -12,3 +14,9 @@ environment_MINIMAL.yaml
 environment2.yaml
 
 example
+
+enrichment/*
+
+Singularity2.def
+*.sif
+*.sb

@@ -1,0 +1,137 @@
+## edgeR analysis
+
+
+### Create DGEList
+```{r create_dgelist}
+y <- edger_create_dgelist(countdata, design, coldata, conditionN)
+```
+
+### Filter Counts
+
+All datasets will include a mix of genes that are expressed and those that are not expressed. Whilst it is of interest 
+to examine genes that are expressed in one condition but not in another, some genes are unexpressed throughout all samples.
+Filter genes with at least `r min_count` counts.
+
+```{r filter_counts}
+y <- edger_filter_counts(y, design, min_count)$y
+```
+
+
+Plotting the distribution log-CPM values shows that a sizeable proportion of genes within each sample are either 
+unexpressed or lowly-expressed with log-CPM values that are small or negative.
+
+### Plot Missingness
+
+Genes that do not have a worthwhile number of reads in any sample should be filtered out of the downstream analyses. 
+There are several reasons for this. From a biological point of view, genes that not expressed at a biologically meaningful 
+level in any condition are not of interest and are therefore best ignored. From a statistical point of view, removing low count genes 
+allows the mean-variance relationship in the data to be estimated with greater reliability and also reduces the number of 
+statistical tests that need to be carried out in downstream analyses looking at differential expression.
+
+```{r plot_missingness}
+edger_plot_missingness(y, min_count, coldata, conditionN, outdir)
+```
+
+### TMM Normalization
+
+TMM normalization is applied to this dataset to account for compositional difference between
+the libraries. For example, samples processed in the first batch of an experiment can have higher 
+expression overall when compared to samples processed in a second batch.
+
+```{r tmm_normalization}
+y <- edger_normalize_tmm(y, design, fdr)
+```
+
+### MDS Plot
+
+The first step of an analysis should be to examine the samples for outliers and for other
+relationships. The function plotMDS produces a plot in which distances between samples
+correspond to leading biological coefficient of variation (BCV) between those samples.
+
+```{r mds_plot}
+edger_plot_mds(y, coldata, conditionN, outdir, sub_col_vector)
+```
+
+### Estimate Dispersion
+
+The square root of the common dispersion gives the coefficient of variation of biological
+variation.
+The dispersion estimates can be viewed in a BCV plot.
+
+```{r estimate_dispersion}
+y <- edger_estimate_dispersion(y, design, outdir)
+```
+
+Here the common dispersion is found to be `r round(y$common.dispersion, digits = 5)`, so the coefficient of biological
+variation is around `r round(sqrt(y$common.dispersion), digits = 5)`.
+
+### Fit Model & Test
+
+```{r fit_model_test}
+lrt <- edger_fit_and_test(y, design, log2FCT, outdir)
+```
+
+### Results summary
+
+The total number of differentially expressed genes at `r fdr` FDR:
+
+```{r edgeR_correction_stats}
+summary(decideTests(lrt))
+```
+
+The genewise tests are for condition vs control differential expression, adjusting for baseline
+differences between the patients. The tests can be viewed as analogous to paired
+t-tests. The top DE tags have tiny p-values and FDR values, as well as large fold changes.
+
+```{r get_results_edgeR}
+results_edgeR <- topTags(lrt, adjust.method = "BH", n = nrow(lrt$table))
+results_edgeR <- na.omit(as.data.frame(results_edgeR))
+results_edgeR$ID <- rownames(results_edgeR)
+
+print(paste(
+  "Number of genes with significant p-value:",
+  sum(results_edgeR$PValue < fdr)
+  ))
+
+print(paste(
+  "Number of genes with significant adjusted p-value:",
+  sum(results_edgeR$FDR < fdr)
+  ))
+
+
+## Split features by different adjusted p-value cutoffs
+padj_table <- lapply(c(1e-04, 0.001, 0.01, 0.025, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5,
+    0.6, 0.7, 0.8, 0.9, 1), function(x) {
+    data.frame("Cut" = x, "Count" = sum(results_edgeR$FDR <= x, na.rm = TRUE))
+})
+padj_table <- do.call(rbind, padj_table)
+
+datatable(
+  padj_table,
+  rownames = NA,
+  extensions = "FixedColumns",
+  options = dt_opts_wide()
+)
+```
+
+### P-value Histogram
+```{r pvalue_histogram}
+edger_pvalue_histogram(results_edgeR, fdr, outdir)
+```
+
+### Volcano Plot
+```{r volcano_plot}
+edger_volcano_plot(results_edgeR, fdr, outdir)
+```
+
+### Annotate & Save
+```{r annotate_save}
+results_edgeR <- edger_annotate_results(results_edgeR, annotated, gene_name, fdr, lrt, outdir)
+
+datatable(
+    results_edgeR,
+    rownames = NA,
+    extensions = "FixedColumns",
+    options = dt_opts_wide()
+)
+```

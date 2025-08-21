@@ -1,0 +1,25 @@
+## Setup & input data
+
+```{r data_import_1}
+# Load counts (featureCounts / SALMON / scRNA_pseudobulk) and harmonize with metadata
+loaded <- load_counts_and_align(
+    data_origin     = data_origin,
+    count_path      = countFilePath,
+    coldata         = coldata,
+    t2g_path        = t2gPath,
+    gene_name       = gene_name,
+    outdir          = outdir
+)
+
+countdata <- loaded$countdata
+coldata   <- loaded$coldata # possibly filtered/reordered
+design    <- loaded$design
+
+# Quick previews
+datatable(coldata, caption = "Samplesheet", extensions = "FixedColumns", options = dt_opts_wide())
+
+# Save starting environment (as in your original)
+save(list = ls(all.names = TRUE), file = file.path(outdir, "start_environment.RData"))
+```
+
+#### The formula used to model gene expression in this analysis is: "`r format(formula)`".

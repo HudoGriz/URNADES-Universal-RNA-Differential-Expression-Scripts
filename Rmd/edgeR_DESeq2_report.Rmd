@@ -1,0 +1,108 @@
+---
+title: "`r params$data_origin` Bulk RNA Differential expression analysis with DESeq2 & edgeR"
+date: "Last Updated: `r format(Sys.time(), '%d, %B, %Y at %H:%M')`"
+output:
+    html_document:
+        toc: true
+        toc_float: true
+        code_folding: hide
+        theme: cerulean
+params:
+    data_origin: NULL
+    countFilePath: NULL
+    output: NULL
+    coldata: NULL
+    annotated: NULL
+    formula: NULL
+    t2gPath: NULL
+    gene_name: "gene_id"
+    min_count: 10
+    fdr: 0.05
+    conditionN: 2
+    log2FCT: 2
+    topNGenes: 20
+    sub_col_vector: ""
+---
+
+```{r setup, include=FALSE} 
+suppressPackageStartupMessages({
+    library(knitr); library(dplyr); library(ggplot2); library(DT)
+    library(plotly); library(ggvenn); library(RColorBrewer)
+})
+
+# make project root = parent of this Rmd so we can source ../R/*.R and use relative files
+project_dir <- normalizePath(file.path(dirname(knitr::current_input()), ".."))
+knitr::opts_knit$set(root.dir = project_dir)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+
+# load helper scripts
+source(file.path(project_dir, "R", "utils.R"))
+source(file.path(project_dir, "R", "plotting.R"))
+source(file.path(project_dir, "R", "load_counts.R"))
+source(file.path(project_dir, "R", "qc_plots.R"))
+source(file.path(project_dir, "R", "edgeR_pipeline.R"))
+source(file.path(project_dir, "R", "deseq2_pipeline.R"))
+
+# expose params
+data_origin     <- params$data_origin
+countFilePath   <- params$countFilePath
+r_output        <- normalizePath(ifelse(params$output == "" || is.null(params$output), ".", params$output))
+coldata         <- params$coldata
+annotated       <- params$annotated
+formula         <- params$formula
+t2gPath         <- params$t2gPath
+gene_name       <- params$gene_name
+min_count       <- params$min_count
+fdr             <- params$fdr
+conditionN      <- params$conditionN
+log2FCT         <- params$log2FCT
+topNGenes       <- params$topNGenes
+sub_col_vector  <- params$sub_col_vector
+
+# ensure output subfolder exists
+outdir <- file.path(r_output, data_origin)
+dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+
+# ensure unique gene rows in annotation
+annotated <- annotated[!duplicated(annotated[[gene_name]]), , drop = FALSE]
+
+# save(list = ls(all.names = TRUE), file = paste0(outdir, "/start_environment.RData"))
+# load(file = paste0("/home/ssld/Documents/URNADES-Universal-RNA-Differential-Expression-Scripts_new/output/SC_salmon/SALMON/start_environment.RData"))
+```
+
+## Introduction
+
+This report is designed to be used with the `r data_origin` pipeline.
+It will take the output of the `r data_origin` pipeline and perform differential gene expression analysis using DESeq2 and edgeR.
+The report will also generate a number of plots to help visualize the data.
+
+
+```{r data_import, child='Rmd/01_data_import.Rmd'}
+```
+
+```{r qc_exploration, child='Rmd/02_qc_exploration.Rmd'}
+```
+
+```{r edgeR_analysis, child='Rmd/03_edgeR_analysis.Rmd'}
+```
+
+```{r deseq2_analysis, child='Rmd/04_deseq2_analysis.Rmd'}
+```
+
+```{r results_summary, child='Rmd/05_results_summary.Rmd'}
+```
+
+
+## Sources
+
+https://github.com/gantunes00/rnaseq-data-analysis-brb/blob/master/02-differential-expression.md
+
+https://4va.github.io/biodatasci/r-rnaseq-airway.html
+
+https://www.bioconductor.org/packages/release/bioc/vignettes/edgeR/inst/doc/edgeRUsersGuide.pdf
+
+http://bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html
+
+https://github.com/maxplanck-ie/snakepipes
+
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4937821/

@@ -1,0 +1,35 @@
+## Combined results & Venn diagrams
+
+Venn Diagram of the DE genes from the different methods.
+For further analysis, we will use only the genes that are significant in the DESeq2 and edgeR methods.
+
+
+### Comparison of DE genes acording to the adjusted p-value cutoff (`r fdr`).
+
+```{r venn_padj}
+venn1 <- venn_and_common(
+  res_deseq2   = results_DESeq2,
+  res_edger    = results_edgeR,
+  fdr          = fdr,
+  log2FCT      = NULL,  # padj/FDR only
+  annotated    = annotated,
+  out_csv      = file.path(outdir, "common_sig_genes.csv")
+)
+print(venn1$venn_plot)
+datatable(venn1$common_df, caption = "Common significant (adj p) genes", options = dt_opts_wide())
+```
+
+### Comparison of DE genes acording to the adjusted p-value cutoff (`r fdr`) and log2FoldChange (`r log2FCT`).
+
+```{r venn_padj_log2FC}
+venn2 <- venn_and_common(
+  res_deseq2   = results_DESeq2,
+  res_edger    = results_edgeR,
+  fdr          = fdr,
+  log2FCT      = log2FCT,  # both padj/FDR & |log2FC|
+  annotated    = annotated,
+  out_csv      = file.path(outdir, "common_sig_DE_genes.csv")
+)
+print(venn2$venn_plot)
+datatable(venn2$common_df, caption = "Common significant (adj p + |log2FC|) genes", options = dt_opts_wide())
+```

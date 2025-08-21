@@ -1,0 +1,154 @@
+Bootstrap: docker
+From: rocker/r-ver:4.3.2
+
+%labels
+    Author URNADES Project
+    Version v1.0
+    Description Singularity container for Universal RNA Differential Expression Scripts (URNADES)
+
+%help
+    This container provides R and all required packages for the URNADES project.
+    
+    Usage:
+    singularity exec urnades.sif Rscript your_script.R
+    singularity shell urnades.sif
+    
+    The container includes:
+    - R 4.3.2
+    - All Bioconductor and CRAN packages required by URNADES
+    - System dependencies for package compilation
+
+%post
+    # Update system packages
+    apt-get update -y
+    
+    # Install system dependencies
+    apt-get install -y \
+        libcurl4-openssl-dev \
+        libssl-dev \
+        libxml2-dev \
+        libpng-dev \
+        libjpeg-dev \
+        libgit2-dev \
+        libharfbuzz-dev \
+        libfribidi-dev \
+        libfreetype6-dev \
+        libfontconfig1-dev \
+        libtiff5-dev \
+        pandoc \
+        pandoc-citeproc \
+        texlive-latex-base \
+        texlive-latex-recommended \
+        texlive-latex-extra \
+        texlive-fonts-recommended \
+        lmodern \
+        wget \
+        ca-certificates
+
+    apt-get install -y \
+        libcurl4-gnutls-dev
+
+    # Install R packages
+    R --slave -e "
+    # Install BiocManager first
+    install.packages('BiocManager', repos='https://cloud.r-project.org/')
+    
+    # Set Bioconductor version
+    BiocManager::install(version = '3.18')
+    
+    # CRAN packages
+    cran_packages <- c(
+        'optparse',
+        'knitr',
+        'rmarkdown',
+        'tidyverse',
+        'dplyr',
+        'ggplot2',
+        'gplots',
+        'plotly',
+        'RColorBrewer',
+        'DT',
+        'gridExtra',
+        'ggvenn',
+        'calibrate',
+        'msigdbr',
+        'grDevices',
+        'grid'
+    )
+    
+    # Install CRAN packages
+    install.packages(cran_packages, 
+                    repos='https://cloud.r-project.org/',
+                    dependencies=TRUE,
+                    Ncpus=parallel::detectCores())
+    
+    # Bioconductor packages
+    bioc_packages <- c(
+        'DESeq2',
+        'edgeR',
+        'tximport',
+        'EnhancedVolcano',
+        'fgsea',
+        'Rsamtools',
+        'rtracklayer',
+        'biomaRt'
+    )
+    
+    # Install Bioconductor packages
+    BiocManager::install(bioc_packages, 
+                        dependencies=TRUE,
+                        Ncpus=parallel::detectCores())
+    
+    # Verify installation
+    cat('\\n=== Checking package installation ===\\n')
+    all_packages <- c(cran_packages, bioc_packages)
+    
+    for (pkg in all_packages) {
+        if (require(pkg, character.only=TRUE, quietly=TRUE)) {
+            cat(sprintf('✓ %s installed successfully\\n', pkg))
+        } else {
+            cat(sprintf('✗ %s installation failed\\n', pkg))
+        }
+    }
+    "
+    
+    # Clean up
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+    # Clean only R temporary files, not system files
+    rm -rf /tmp/Rtmp*
+
+%environment
+    export LC_ALL=C
+    export LANG=C
+
+%runscript
+    echo "URNADES Singularity Container"
+    echo "R version: $(R --version | head -1)"
+    echo ""
+    echo "Usage examples:"
+    echo "  singularity exec urnades.sif R"
+    echo "  singularity exec urnades.sif Rscript URNADES.R --help"
+    echo "  singularity shell urnades.sif"
+    echo ""
+    exec "$@"
+
+%test
+    # Test R installation
+    R --version
+    
+    # Test key packages
+    R --slave -e "
+    packages_to_test <- c('DESeq2', 'edgeR', 'ggplot2', 'fgsea', 'msigdbr', 'tximport')
+    
+    cat('Testing package availability:\\n')
+    for (pkg in packages_to_test) {
+        if (require(pkg, character.only=TRUE, quietly=TRUE)) {
+            cat(sprintf('✓ %s: OK\\n', pkg))
+        } else {
+            cat(sprintf('✗ %s: FAILED\\n', pkg))
+            quit(status=1)
+        }
+    }
+    cat('All tests passed!\\n')
+    "

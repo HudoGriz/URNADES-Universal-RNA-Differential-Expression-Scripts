@@ -1,0 +1,262 @@
+## DESeq2 analysis
+
+DESeq2 is an R package for analyzing count-based NGS data like RNA-seq. It is available 
+from [Bioconductor](http://www.bioconductor.org/). Bioconductor is a project to provide tools for analysing 
+high-throughput genomic data including RNA-seq, ChIP-seq and arrays. 
+You can explore Bioconductor packages [here](http://www.bioconductor.org/packages/release/BiocViews.html#___Software).
+Analysis sourced from 
+[Vignette](http://bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#input-data) 
+and [Github](https://gist.github.com/stephenturner/f60c1934405c127f09a6).
+
+### Preparing inputs
+```{r load_deseq2}
+dds <- deseq2_create_dds(countdata, coldata, design)
+```
+
+### Filter low counts
+```{r filter_low_counts}
+dds <- deseq2_filter_counts(dds, min_count)$dds
+```
+
+### Run DESeq & get results
+```{r run_deseq2}
+dds <- DESeq(dds)
+```
+
+### DESeq2 dispersion
+
+This plot shows the fitting of dispersion estimates for all genes by DESeq2. A better fit would mean 
+more reliable results.
+
+```{r deseq2_dispersion}
+plotDispEsts(dds, main = "Dispersion plot")
+```
+
+### DESeq2 regularization
+
+Regularized log transformation for clustering/heatmaps, etc
+
+```{r DESeq_regularization}
+rld <- rlogTransformation(dds)
+# head(assay(rld))
+hist(assay(rld))
+```
+
+### DESeq2 Heatmap
+
+This plot shows how samples are clustered based on their euclidean distance using the regularized 
+log transformed count data. This figure gives an overview of how the samples are hierarchically clustered. 
+It is a complementary figure to the PCA plot.
+
+```{r DESeq_hm}
+condition <- factor(coldata[[conditionN]])
+mycols <- brewer.pal(8, "Dark2")[1:length(unique(condition))]
+
+# Sample distance heatmap
+sampleDists <- as.matrix(dist(t(assay(rld))))
+gplots::heatmap.2(as.matrix(sampleDists),
+  key = F, trace = "none",
+  col = gplots::colorpanel(100, "#1109ee", "#ffffff"),
+  ColSideColors = mycols[condition], RowSideColors = mycols[condition],
+  margin = c(10, 10), main = "Sample Distance Matrix"
+)
+```
+
+### DESeq2 PCA
+
+PCA plot using the first two principal components that explain the variability in the data using the regularized 
+log count data. If you are unfamiliar with principal component analysis, 
+you might want to check this [interactive explanation](http://setosa.io/ev/principal-component-analysis/). 
+
+```{r DESeq_pca}
+# n <- length(unique(coldata[, 1])) + length(unique(coldata[, conditionN]))
+PCAdata <- DESeq2::plotPCA(rld, intgroup = colnames(coldata)[conditionN], returnData = TRUE)
+percentVar <- round(100 * attr(PCAdata, "percentVar"))
+
+mat <- match(PCAdata$name, coldata[, 1])
+PCAdata$sample <- as.character(coldata$Patient_ID[mat])
+
+gp <- ggplot(PCAdata, aes(PC1, PC2, color = condition))
+gp <- gp +
+    geom_hline(aes(yintercept = 0), colour = "grey") +
+    geom_vline(aes(xintercept = 0), colour = "grey") +
+    geom_point(size = 4) +
+    xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+    ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+    ggtitle("PCA\n")+
+    theme_bw()
+
+gp <- gp +
+geom_point(aes(PCAdata$PC1, PCAdata$PC2, color = PCAdata$sample), size = 2) +
+scale_color_manual(values = sub_col_vector)
+
+ggplotly(gp)
+```
+
+In this case, the first and second principal component 
+explain `r percentVar[1]` and `r percentVar[2]` percent of the variance respectively.
+
+
+### DESeq2 DE genes
+
+Get differential expression results
+
+```{r DESeq_genes}
+res <- results(dds)
+res <- na.omit(res)
+res <- res[order(res$padj), ]
+```
+
+How many genes are significant?
+
+```{r DESeq_siggenes}
+table(res$padj < fdr)
+```
+
+### DESeq2 MA plot
+
+MA plots compare the mean of the normalized counts against the log fold change. 
+They show one point per feature. 
+The points are shown in blue if the feature has an adjusted p-value less than alpha, 
+that is, the statistically significant features are shown in blue.
+
+```{r DESeq_MA}
+maplot <- function(res, thresh = fdr, labelsig = FALSE, textcx = 1, ...) {
+  with(res, plot(
+    baseMean, log2FoldChange, pch = 20, cex = .8, log = "x",
+    xlab = "Mean of Normalized Counts", ylab = "Log2 Fold Change", ...
+    ))
+  with(subset(res, padj < thresh), points(baseMean, log2FoldChange, col = "blue", pch = 20, cex = 1))
+  if (labelsig) {
+    require(calibrate)
+    with(subset(res, padj < thresh), textxy(baseMean, log2FoldChange, labs = Gene, cex = textcx, col = 2))
+  }
+}
+
+maplot(res, main = "MA Plot")
+# invisible(dev.off())
+# TODO: Plot not showing
+
+# Package
+BiocGenerics::plotMA(
+  res,
+  ylim = c(-3, 3),
+  cex = .8,
+  xlab = "Mean of Normalized Counts",
+  ylab = "Log Fold Change"
+  )
+# invisible(dev.off())
+
+# Shrinken low values
+resAshT <- lfcShrink(dds, coef = colnames(design)[ncol(design)], type = "apeglm")
+BiocGenerics::plotMA(
+  resAshT, ylim = c(-3, 3), cex = .8,
+  xlab = "Mean of Normalized Counts",
+  ylab = "Shrinken Log Fold Change"
+  )
+abline(h = c(-log2FCT, log2FCT), col = "dodgerblue", lwd = 2)
+invisible(dev.off())
+```
+
+```{r DESeq_formating}
+## Order by adjusted p-value
+res <- res[order(res$padj), ]
+results_DESeq2 <- as.data.frame(res)
+results_DESeq2$ID <- rownames(results_DESeq2)
+## Merge with normalized count data
+# results_DESeq2 <- merge(as.data.frame(res), as.data.frame(counts(dds, normalized = TRUE)), by = "row.names", sort = FALSE)
+# names(results_DESeq2)[1] <- "ID"
+```
+
+
+### DESeq2 P-values distribution
+
+Histogram of the unadjusted and adjusted p-values.
+
+
+```{r DESeq_hist}
+hp <- ggplot(results_DESeq2) +
+  geom_histogram(aes(pvalue, fill = "p-value"), colour = "grey20", alpha = 0.5, stat = "bin") +
+  geom_histogram(aes(padj, fill = "padj"), colour = "grey20", alpha = 0.5, stat = "bin") +
+  scale_fill_manual(
+    name = "group", values = c("p-value" = "steelblue", "padj" = "grey20"), labels = c("a" = "p-value", "b" = "padj")
+    ) +
+  geom_vline(xintercept = fdr, colour = "red") +
+  theme_bw()
+
+ggplotly(hp)
+```
+
+```{r DESeq_hist_table}
+## Split features by different adjusted p-value cutoffs
+padj_table <- lapply(c(1e-04, 0.001, 0.01, 0.025, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5,
+    0.6, 0.7, 0.8, 0.9, 1), function(x) {
+    data.frame("Cut" = x, "Count" = sum(results_DESeq2$padj <= x, na.rm = TRUE))
+})
+padj_table <- do.call(rbind, padj_table)
+
+datatable(
+  padj_table,
+  rownames = NA,
+  extensions = "FixedColumns",
+  options = dt_opts_wide()
+)
+```
+
+```{r DESeq_results}
+print(paste(
+  "Number of genes with significant p-value:",
+  sum(results_DESeq2$pvalue < fdr)
+  ))
+
+DESEQ2_Nsig <- sum(results_DESeq2$padj < fdr)
+print(paste(
+  "Number of genes with significant adjusted p-value:",
+  DESEQ2_Nsig
+  ))
+```
+
+```{r DESeq_results_annotation}
+# Annotate gnes and save to table
+annotated_sub <- annotated[annotated[, gene_name] %in% row.names(results_DESeq2), ]
+results_DESeq2 <- merge(results_DESeq2, annotated_sub, by.x = "ID", by.y = gene_name, all = TRUE)
+results_DESeq2 <- results_DESeq2[order(results_DESeq2$padj), ]
+write.table(results_DESeq2, file.path(outdir, "DESeq2.csv"), append = FALSE, quote = FALSE, sep = "\t", row.names = FALSE)
+
+counts <- data.frame(counts(dds, normalized = TRUE))
+counts$ID <- rownames(counts)
+results_DESeq_counts <- merge(results_DESeq2, counts, by = "ID", all = TRUE)
+write.table(results_DESeq_counts, file.path(outdir, "DESeq2_counts.csv"),
+  append = FALSE, quote = FALSE, sep = "\t", row.names = FALSE
+  )
+```
+
+### DESeq2 volcano plot
+
+[Volcano plots](https://en.wikipedia.org/wiki/Volcano_plot_(statistics)) are another (sometimes preferred) way of visulizing the DE results. 
+It clearly identifies the highest changing genes from the results.
+
+```{r DESeq_VC}
+EnhancedVolcano(
+    results_DESeq2,
+    lab = "",
+    x = "log2FoldChange",
+    y = "padj",
+    title = paste0(data_origin, "--DESeq2 results"),
+    subtitle = "",
+    legendPosition = "top",
+    pCutoff = fdr
+    # subtitle = "Differential expression"
+)
+```
+
+### DESeq2 results
+
+```{r DESeq_DT}
+datatable(
+    results_DESeq2,
+    rownames = NA,
+    extensions = "FixedColumns",
+    options = dt_opts_wide()
+)
+```

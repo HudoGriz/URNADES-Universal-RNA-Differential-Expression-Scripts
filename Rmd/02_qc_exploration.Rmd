@@ -1,0 +1,93 @@
+## Raw data exploration & quick checks
+
+### top expressed genes across all samples
+```{r top_gene_counts}
+# Compute row sums
+rsums <- rowSums(countdata)
+
+# Get top genes
+top_indices <- order(rsums, decreasing = TRUE)
+top_counts <- countdata[top_indices, , drop = FALSE]
+
+# Show in a datatable
+datatable(
+    top_counts,
+    caption = "Top genes raw counts across samples",
+    options = list(
+        scrollX = TRUE,
+        pageLength = 10
+    )
+)
+```
+
+### mean per condition & exploratory scatter comparisons (log scale)
+```{r mean_per_condition}
+qc <- quick_condition_means_and_scatter(countdata, coldata, conditionN = conditionN)
+print(qc$grid)
+gene_means <- qc$gene_means
+mean_combinations <- qc$mean_combinations
+```
+
+We can find candidate differentially expressed genes by looking for genes with a large change between samples. 
+A common threshold used is log2 fold change of 2, that means we are testing if a gene's expression is 
+4 times greater in condition compared to our control.
+
+We will use log2FCT = `r log2FCT`.
+
+We will calculate log2 fold change for all the genes and color the genes with fold change of more than 
+`r log2FCT * 2` or less than `r -log2FCT * 2` on the plot.
+
+First, check for genes with a mean expression of 0. Putting zeroes into the log2 fold change calculation will produce NAs, 
+so we might want to remove these genes. Note: this is for mathematical reasons, although different software may produce 
+different results when you try to do `log2(0)`.
+
+### zero / non-zero counts per condition
+```{r zero_nonzero_counts}
+print("Zero counts per condition:")
+print(apply(gene_means, 2, function(x) sum(x <= 0)))
+print("Non-zero counts per condition:")
+print(apply(gene_means, 2, function(x) sum(x > 0)))
+```
+
+### remove zero-mean rows for logFC math
+```{r remove_zero_mean_rows}
+gene_means_f <- gene_means
+gene_means_f[gene_means_f == 0] <- NA
+gene_means_f <- na.omit(gene_means_f)
+print("Zero-mean rows removed for logFC calculation:")
+print(nrow(gene_means) - nrow(gene_means_f))
+print("Remaining rows for logFC calculation:")
+print(nrow(gene_means_f))
+```
+
+### compute log2FCs and mark |log2FC| > log2FCT
+
+Mathematically things work out better for us when we test things on the log scale.
+On the absolute scale, up-regulation goes from 1 to infinity, while down-regulation is bounded by 0 and 1. On the log scale,
+up-regulation goes from 0 to infinity, and down-regulation goes from 0 to negative infinity. Let's compute a log-base-2 of the fold change.
+
+When we do this we'll see some `Inf` and `-Inf` values. This is what happens when we take `log2(Inf)` or `log2(0)`.
+
+```{r log2fc}
+fc <- add_pairwise_log2fc(
+    gene_means = gene_means_f,
+    mean_combinations = mean_combinations,
+    log2FCT = log2FCT
+)
+grid::grid.newpage(); grid::grid.draw(fc$plot_grid)
+gene_means_log <- fc$gene_means_log
+```
+
+### annotate & show largest absolute log2FC
+```{r annotate_and_show_largest_log2fc}
+gene_means_log$ID <- rownames(gene_means_log)
+annot_sub <- annotated[annotated[[gene_name]] %in% gene_means_log$ID, , drop = FALSE]
+gene_means_log <- merge(gene_means_log, annot_sub, by.x = "ID", by.y = gene_name, all.x = TRUE)
+datatable(
+    gene_means_log, caption = "Genes with log2FC columns",
+    options = dt_opts_wide()
+    )
+
+# Save starting environment (as in your original)
+save(list = ls(all.names = TRUE), file = file.path(outdir, "qc_environment.RData"))
+```
